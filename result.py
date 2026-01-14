@@ -282,23 +282,21 @@ def run_workflow(
             log_step(3, f"Rate Card processing failed: {e}", "error")
             raise
         
+       # ========================================
+        # STEP 4: LC-ETOF Mapping
         # ========================================
-        # STEP 4: Order-LC-ETOF Mapping
-        # ========================================
-        log_step(4, "ORDER-LC-ETOF MAPPING", "section")
+        log_step(4, "LC-ETOF MAPPING", "section")
         try:
-            from part7_optional_order_lc_etof_mapping import process_order_lc_etof_mapping
-            log_step(4, "Creating Order-LC-ETOF mapping...", "info")
+            from part7_optional_order_lc_etof_mapping import process_lc_etof_mapping
+            log_step(4, "Creating LC-ETOF mapping...", "info")
             lc_input_param = lc_list if len(lc_list) > 1 else lc_list[0]
-            mapping_df, mapping_columns = process_order_lc_etof_mapping(
+            mapping_df, mapping_columns = process_lc_etof_mapping(
                 lc_input_path=lc_input_param,
-                etof_path=etof_file,
-                order_files_path=order_file
+                etof_path=etof_file
             )
             log_step(4, f"Mapping completed: {mapping_df.shape[0]} rows", "success")
         except Exception as e:
             log_step(4, f"Mapping failed: {e}", "warning")
-        
         # ========================================
         # STEP 5: Vocabulary Mapping
         # ========================================
@@ -905,3 +903,4 @@ if __name__ == "__main__":
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
         demo.launch(server_name="127.0.0.1", share=False)
+
