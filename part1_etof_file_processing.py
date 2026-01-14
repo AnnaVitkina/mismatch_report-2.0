@@ -90,7 +90,7 @@ def process_etof_file(file_path):
             if os.path.exists(input_folder):
                 all_files = os.listdir(input_folder)
                 mismatch_files = [f for f in all_files 
-                                 if 'mismatch_rhenus' in f.lower() and (f.endswith('.xlsx') or f.endswith('.xls'))]
+                                 if 'mismatch' in f.lower() and (f.endswith('.xlsx') or f.endswith('.xls'))]
                 print(f"   Input folder has {len(all_files)} files, found {len(mismatch_files)} mismatch file(s)")
             else:
                 print(f"   WARNING: Input folder '{input_folder}' does not exist!")
@@ -150,3 +150,4 @@ if __name__ == "__main__":
     etof_dataframe, etof_column_names = process_etof_file('etofs_rhenus.xlsx')
     save_dataframe_to_excel(etof_dataframe, "etof_rhenus.xlsx")
     print(etof_dataframe.head())
+
