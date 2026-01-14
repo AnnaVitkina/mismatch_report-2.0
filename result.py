@@ -34,17 +34,33 @@ def get_script_directory():
     except:
         pass
     
-    # Check for Colab Mismatch_report folder
+    # Check for Colab Mismatch_report folder - explicit paths
     colab_paths = [
         '/content/Mismatch_report',
         '/content/mismatch_report',
+        '/content/mismatch_report-2.0',
+        '/content/mismatch-report-2.0',
+        '/content/Mismatch_report-2.0',
         os.path.join(os.getcwd(), 'Mismatch_report'),
+        os.path.join(os.getcwd(), 'mismatch_report-2.0'),
     ]
     for path in colab_paths:
         if os.path.exists(path) and os.path.isdir(path):
             # Verify it has our expected files
             if os.path.exists(os.path.join(path, 'result.py')) or os.path.exists(os.path.join(path, 'matching.py')):
                 return path
+    
+    # Dynamic search: look for any folder in /content that has our files
+    content_dir = '/content'
+    if os.path.exists(content_dir):
+        for item in os.listdir(content_dir):
+            item_path = os.path.join(content_dir, item)
+            if os.path.isdir(item_path):
+                # Check if this folder has our expected files
+                if (os.path.exists(os.path.join(item_path, 'part1_etof_file_processing.py')) or 
+                    os.path.exists(os.path.join(item_path, 'matching.py'))):
+                    print(f"🔍 Found project folder: {item_path}")
+                    return item_path
     
     # Check if current directory has our files
     cwd = os.getcwd()
@@ -889,7 +905,3 @@ if __name__ == "__main__":
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
         demo.launch(server_name="127.0.0.1", share=False)
-
-
-
-
