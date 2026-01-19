@@ -12,10 +12,9 @@ and creates a cleaned result file with:
 import pandas as pd
 import re
 from pathlib import Path
-from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.utils import get_column_letter
+
+# Import formatting from result_transforming
+from result_transforming import format_result_file
 
 
 def get_partly_df_folder():
@@ -285,92 +284,6 @@ def create_pivot_summary(df):
     return pivot
 
 
-def apply_formatting(wb, cost_type_groups=None):
-    """
-    Apply formatting to the workbook.
-    
-    Args:
-        wb: openpyxl Workbook object
-        cost_type_groups: dict {sheet_name: list of (start_row, end_row, color_index), ...}
-                         where color_index is 0 or 1 for alternating colors
-    """
-    if cost_type_groups is None:
-        cost_type_groups = {}
-    
-    # Define styles
-    header_font = Font(bold=True, color='FFFFFF')
-    header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
-    header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    
-    pivot_header_fill = PatternFill(start_color='70AD47', end_color='70AD47', fill_type='solid')
-    
-    thin_border = Border(
-        left=Side(style='thin'),
-        right=Side(style='thin'),
-        top=Side(style='thin'),
-        bottom=Side(style='thin')
-    )
-    
-    # Two alternating colors for cost type groups
-    cost_color_1 = PatternFill(start_color='DAEEF3', end_color='DAEEF3', fill_type='solid')  # Light blue
-    cost_color_2 = None  # White (no fill)
-    
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        
-        # Determine if this is a pivot sheet
-        is_pivot = 'Pivot' in sheet_name
-        
-        # Format header row
-        for cell in ws[1]:
-            cell.font = header_font
-            cell.fill = pivot_header_fill if is_pivot else header_fill
-            cell.alignment = header_alignment
-            cell.border = thin_border
-        
-        # Get cost type groups for this sheet
-        groups = cost_type_groups.get(sheet_name, [])
-        
-        # Create a row -> color mapping from groups
-        row_colors = {}
-        for start_row, end_row, color_idx in groups:
-            for r in range(start_row, end_row + 1):
-                row_colors[r] = color_idx
-        
-        # Format data rows
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
-            for cell in row:
-                cell.border = thin_border
-                cell.alignment = Alignment(vertical='center', wrap_text=True)
-                
-                # Apply color based on cost type group (for data sheets)
-                if not is_pivot and row_idx in row_colors:
-                    if row_colors[row_idx] == 0:
-                        cell.fill = cost_color_1
-                    # else: leave white (no fill needed)
-        
-        # Auto-adjust column widths
-        for column_cells in ws.columns:
-            max_length = 0
-            column = column_cells[0].column_letter
-            
-            for cell in column_cells:
-                try:
-                    if cell.value:
-                        cell_length = len(str(cell.value))
-                        if cell_length > max_length:
-                            max_length = cell_length
-                except:
-                    pass
-            
-            # Set width with limits
-            adjusted_width = min(max(max_length + 2, 10), 50)
-            ws.column_dimensions[column].width = adjusted_width
-        
-        # Freeze the header row
-        ws.freeze_panes = 'A2'
-
-
 def clean_sheet_name(name, suffix=""):
     """Clean string to be a valid Excel sheet name (max 31 chars, no invalid chars)."""
     if name is None or pd.isna(name):
@@ -451,13 +364,14 @@ def get_result_folder():
     return output_folder
 
 
-def process_and_save(sheets, output_filename="result.xlsx"):
+def process_and_save(sheets, output_filename="result.xlsx", extra_columns=None):
     """
     Process all sheets and save to output file.
     
     Args:
         sheets: dict {sheet_name: DataFrame}
         output_filename: Output file name
+        extra_columns: List of column names to add from lc_etof_with_comments.xlsx
     
     Returns:
         Path to output file
@@ -507,18 +421,24 @@ def process_and_save(sheets, output_filename="result.xlsx"):
                 pivot_df.to_excel(writer, sheet_name=pivot_sheet_name, index=False)
                 print(f"      Pivot tab '{pivot_sheet_name}': {len(pivot_df)} patterns")
     
-    # Now apply formatting with cost type groups
-    print("\n   Applying formatting...")
-    wb = load_workbook(output_path)
-    apply_formatting(wb, all_cost_type_groups)
-    wb.save(output_path)
+    # Now add extra columns (if any) and apply formatting via result_transforming
+    print("\n   Calling result_transforming for extra columns and formatting...")
+    format_result_file(output_path, all_cost_type_groups, extra_columns)
     
     print(f"\n   Saved to: {output_path}")
     return output_path
 
 
-def main():
-    """Main function to run the cleaning process."""
+def main(extra_columns=None):
+    """
+    Main function to run the cleaning process.
+    
+    Args:
+        extra_columns: List of column names to add from lc_etof_with_comments.xlsx
+    
+    Returns:
+        Path to output file
+    """
     print("\n" + "="*80)
     print("CLEANING CONDITIONS CHECKED RESULTS")
     print("="*80)
@@ -529,7 +449,7 @@ def main():
     
     # Step 2: Process and save
     print("\n2. Processing and creating result file...")
-    output_path = process_and_save(sheets)
+    output_path = process_and_save(sheets, extra_columns=extra_columns)
     
     print("\n" + "="*80)
     print(f"DONE! Result saved to: {output_path}")
