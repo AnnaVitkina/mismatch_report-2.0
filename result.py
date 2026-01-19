@@ -175,7 +175,8 @@ def run_workflow(
     order_file=None,
     ignore_rate_card_columns=None,
     include_positive_discrepancy=False,
-    script_dir=None
+    script_dir=None,
+    extra_columns=None
 ):
     """
     Run the complete mismatch analysis workflow.
@@ -190,6 +191,7 @@ def run_workflow(
         ignore_rate_card_columns: Optional list of column names to ignore
         include_positive_discrepancy: If True, include positive discrepancies
         script_dir: Script directory for path resolution
+        extra_columns: Optional list of column names to add from lc_etof_with_comments
     
     Returns:
         str: Path to the final result file, or None if workflow failed
@@ -282,7 +284,7 @@ def run_workflow(
             log_step(3, f"Rate Card processing failed: {e}", "error")
             raise
         
-       # ========================================
+        # ========================================
         # STEP 4: LC-ETOF Mapping
         # ========================================
         log_step(4, "LC-ETOF MAPPING", "section")
@@ -297,6 +299,7 @@ def run_workflow(
             log_step(4, f"Mapping completed: {mapping_df.shape[0]} rows", "success")
         except Exception as e:
             log_step(4, f"Mapping failed: {e}", "warning")
+        
         # ========================================
         # STEP 5: Vocabulary Mapping
         # ========================================
@@ -424,7 +427,9 @@ def run_workflow(
         try:
             from cleaning import main as cleaning_main
             log_step(12, "Creating final result...", "info")
-            result_path = cleaning_main()
+            if extra_columns:
+                log_step(12, f"Extra columns to add: {extra_columns}", "info")
+            result_path = cleaning_main(extra_columns=extra_columns)
             log_step(12, f"Final result created: {result_path}", "success")
         except Exception as e:
             log_step(12, f"Cleaning failed: {e}", "error")
@@ -468,7 +473,8 @@ def run_mismatch_analysis_gradio(
     shipper_name,
     order_file=None,
     ignore_rate_card_columns=None,
-    include_positive_discrepancy=False
+    include_positive_discrepancy=False,
+    extra_columns=None
 ):
     """
     Main workflow for Gradio interface.
@@ -644,6 +650,11 @@ def run_mismatch_analysis_gradio(
         log_status(f"   Shipper: {shipper_name.strip()}", "info")
         
         # Run the workflow
+        # Parse extra columns (already a list from CheckboxGroup)
+        extra_cols = None
+        if extra_columns and len(extra_columns) > 0:
+            extra_cols = extra_columns  # Already a list
+        
         result_file = run_workflow(
             etof_file=etof_filename,
             lc_files=lc_param,
@@ -653,7 +664,8 @@ def run_mismatch_analysis_gradio(
             order_file=order_filename,
             ignore_rate_card_columns=ignore_cols,
             include_positive_discrepancy=include_positive_discrepancy,
-            script_dir=script_dir
+            script_dir=script_dir,
+            extra_columns=extra_cols
         )
         
         log_status(f"   Workflow returned: {result_file}", "info")
@@ -834,6 +846,31 @@ with gr.Blocks(title="Mismatch Analyzer", theme=gr.themes.Soft()) as demo:
             info="If checked, includes both positive and negative discrepancies"
         )
     
+    with gr.Row():
+        extra_columns_input = gr.CheckboxGroup(
+            label="Extra Columns to Add (Optional)",
+            choices=[
+                "Invoice entity",
+                "Carrier name",
+                "Destination postal code",
+                "Origin postal code",
+                "Destination airport",
+                "Equipment type",
+                "Origin airport",
+                "Business unit name",
+                "Transport mode",
+                "LDM",
+                "CBM",
+                "Weight",
+                "DANGEROUS Goods",
+                "Charge weight",
+                "House bill",
+                "Master bill",
+                "Roundtrip",
+            ],
+            info="Select columns to extract additionally and add to result (matched by ETOF Number)"
+        )
+    
     gr.Markdown("---")
     
     launch_button = gr.Button("🚀 Run Analysis", variant="primary", size="lg")
@@ -850,7 +887,7 @@ with gr.Blocks(title="Mismatch Analyzer", theme=gr.themes.Soft()) as demo:
         )
     
     def launch_workflow(etof_file, lc_files, rate_card_files, mismatch_file, 
-                       shipper_name, order_file, ignore_columns, include_positive):
+                       shipper_name, order_file, ignore_columns, include_positive, extra_columns):
         try:
             result_file, status_text = run_mismatch_analysis_gradio(
                 etof_file=etof_file,
@@ -860,7 +897,8 @@ with gr.Blocks(title="Mismatch Analyzer", theme=gr.themes.Soft()) as demo:
                 shipper_name=shipper_name,
                 order_file=order_file,
                 ignore_rate_card_columns=ignore_columns,
-                include_positive_discrepancy=include_positive
+                include_positive_discrepancy=include_positive,
+                extra_columns=extra_columns
             )
             return result_file, status_text
         except Exception as e:
@@ -872,7 +910,8 @@ with gr.Blocks(title="Mismatch Analyzer", theme=gr.themes.Soft()) as demo:
         launch_workflow,
         inputs=[
             etof_input, lc_input, rate_card_input, mismatch_input,
-            shipper_input, order_input, ignore_columns_input, include_positive_input
+            shipper_input, order_input, ignore_columns_input, include_positive_input,
+            extra_columns_input
         ],
         outputs=[output_file, status_output]
     )
@@ -903,5 +942,3 @@ if __name__ == "__main__":
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
         demo.launch(server_name="127.0.0.1", share=False)
-
-
