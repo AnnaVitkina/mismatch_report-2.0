@@ -221,6 +221,46 @@ def add_columns_from_source(result_df, columns_to_add, sheet_name=None):
         suffixes=('', '_added')
     )
     
+    # Rename the added columns to friendly names (reverse of EXTRA_COLUMNS_ALIAS_MAP)
+    # EXTRA_COLUMNS_ALIAS_MAP: 'friendly name' -> 'original name'
+    # We need: 'original name' -> 'friendly name'
+    reverse_alias_map = {v: k for k, v in EXTRA_COLUMNS_ALIAS_MAP.items()}
+    rename_added = {}
+    for col in columns_found:
+        if col in reverse_alias_map:
+            rename_added[col] = reverse_alias_map[col]
+    
+    if rename_added:
+        print(f"      Renaming added columns: {rename_added}")
+        result_with_cols = result_with_cols.rename(columns=rename_added)
+    
+    # Reorder columns: put added columns BEFORE "Pre-calc. cost"
+    precalc_col = None
+    for col in result_with_cols.columns:
+        if 'pre-calc' in col.lower() or 'precalc' in col.lower():
+            precalc_col = col
+            break
+    
+    if precalc_col:
+        # Get the position of Pre-calc. cost
+        cols = list(result_with_cols.columns)
+        precalc_idx = cols.index(precalc_col)
+        
+        # Get the names of added columns (after renaming)
+        added_col_names = [rename_added.get(c, c) for c in columns_found]
+        
+        # Remove added columns from their current positions
+        other_cols = [c for c in cols if c not in added_col_names]
+        
+        # Find where precalc_col is now in other_cols
+        precalc_idx_new = other_cols.index(precalc_col)
+        
+        # Insert added columns before precalc
+        new_order = other_cols[:precalc_idx_new] + added_col_names + other_cols[precalc_idx_new:]
+        
+        result_with_cols = result_with_cols[new_order]
+        print(f"      Columns repositioned before '{precalc_col}'")
+    
     print(f"      Columns added successfully")
     return result_with_cols
 
