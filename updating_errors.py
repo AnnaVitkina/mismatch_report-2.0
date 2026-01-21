@@ -20,7 +20,7 @@ from datetime import datetime
 #   "Shared drives/Team Drive Name/Folder"     - Shared Drive
 #   "Shareddrives/Team Drive Name/Folder"      - Shared Drive (alternative)
 # ============================================================
-GOOGLE_DRIVE_PATH = "Shared drives/FA Operations Europe/AT/Generic_AA/Mismatch Analyzer/Files for analysis or issues  # Change this to your desired path
+GOOGLE_DRIVE_PATH = "Shared drives/FA Operations Europe/AT/Generic_AA/Mismatch Analyzer/Files for analysis or issues"  # Change this to your desired path
 # ============================================================
 
 
@@ -303,5 +303,6 @@ if __name__ == "__main__":
     
     # Run upload with hardcoded path
     upload_to_google_drive(google_drive_base_path=GOOGLE_DRIVE_PATH)
+
 
 
