@@ -34,6 +34,7 @@ Logic:
           - Determine multiplier based on Rate By type:
             * Weight-based (contains "weight", "kg", "chargeable") -> use CHARGE_WEIGHT
             * Measurement-based (Quantity/, Condition/) -> look up in MEASUREMENT/UNITS_MEASUREMENT columns
+              (includes parsed data from CALCULATION_MEASURE column: "ACC/THC Fee=1" format)
           - Calculate: Price per unit * multiplier
           - Compare with MIN/MAX prices:
             - if calculated < MIN, apply MIN price
@@ -1159,6 +1160,58 @@ def find_best_matching_cost(cost_type, df_cost_conditions, etof_row_data, debug=
     return all_matches[0]
 
 
+def clean_column_name_from_comparison(column_name, debug=False):
+    """
+    Clean column name that may contain comparison operators.
+    
+    Example: "ACC/ENS Fee greater than or" -> "ACC/ENS Fee"
+    
+    Args:
+        column_name: Raw column name extracted from condition
+        debug: If True, print debug information
+        
+    Returns:
+        Cleaned column name without comparison operators
+    """
+    if not column_name:
+        return column_name
+    
+    import re
+    
+    # Remove comparison operators from the end of column names
+    # Common patterns: greater than, less than, greater than or equal, etc.
+    comparison_patterns = [
+        r'\s+greater\s+than\s+or\s+equal.*$',
+        r'\s+less\s+than\s+or\s+equal.*$',
+        r'\s+greater\s+than\s+or\s*$',
+        r'\s+less\s+than\s+or\s*$',
+        r'\s+greater\s+than.*$',
+        r'\s+less\s+than.*$',
+        r'\s+equal\s+to\s*$',
+        r'\s+>=\s*$',
+        r'\s+<=\s*$',
+        r'\s+>\s*$',
+        r'\s+<\s*$',
+        r'\s+=\s*$',
+    ]
+    
+    cleaned = column_name.strip()
+    original = cleaned
+    
+    for pattern in comparison_patterns:
+        before = cleaned
+        cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE).strip()
+        if debug and cleaned != before:
+            print(f"      [CLEAN DEBUG] Pattern '{pattern}' matched: '{before}' -> '{cleaned}'")
+    
+    if debug and cleaned != original:
+        print(f"      [CLEAN DEBUG] Final: '{original}' -> '{cleaned}'")
+    elif debug:
+        print(f"      [CLEAN DEBUG] No change: '{original}'")
+    
+    return cleaned
+
+
 def parse_applies_if_condition(applies_if_text, debug=False):
     """
     Parse an Applies If condition to extract the column name, condition type, and expected values.
@@ -1231,6 +1284,8 @@ def parse_applies_if_condition(applies_if_text, debug=False):
                 values_str = not_equal_match.group(2).strip()
                 values = re.findall(r"'([^']*)'", values_str)
                 if values:
+                    # Clean column name from comparison operators
+                    column_name = clean_column_name_from_comparison(column_name, debug=debug)
                     conditions.append((column_name, 'does_not_equal', values))
                     if debug:
                         print(f"      [DEBUG] Parsed condition: {column_name} does not equal {values}")
@@ -1243,6 +1298,8 @@ def parse_applies_if_condition(applies_if_text, debug=False):
                 values_str = not_contain_match.group(2).strip()
                 values = re.findall(r"'([^']*)'", values_str)
                 if values:
+                    # Clean column name from comparison operators
+                    column_name = clean_column_name_from_comparison(column_name, debug=debug)
                     conditions.append((column_name, 'does_not_contain', values))
                     if debug:
                         print(f"      [DEBUG] Parsed condition: {column_name} does not contain {values}")
@@ -1255,6 +1312,8 @@ def parse_applies_if_condition(applies_if_text, debug=False):
                 values_str = equals_match.group(2).strip()
                 values = re.findall(r"'([^']*)'", values_str)
                 if values:
+                    # Clean column name from comparison operators
+                    column_name = clean_column_name_from_comparison(column_name, debug=debug)
                     conditions.append((column_name, 'equals', values))
                     if debug:
                         print(f"      [DEBUG] Parsed condition: {column_name} equals {values}")
@@ -1267,6 +1326,8 @@ def parse_applies_if_condition(applies_if_text, debug=False):
                 values_str = starts_match.group(2).strip()
                 values = re.findall(r"'([^']*)'", values_str)
                 if values:
+                    # Clean column name from comparison operators
+                    column_name = clean_column_name_from_comparison(column_name, debug=debug)
                     conditions.append((column_name, 'starts_with', values))
                     if debug:
                         print(f"      [DEBUG] Parsed condition: {column_name} starts with {values}")
@@ -1279,6 +1340,8 @@ def parse_applies_if_condition(applies_if_text, debug=False):
                 values_str = contains_match.group(2).strip()
                 values = re.findall(r"'([^']*)'", values_str)
                 if values:
+                    # Clean column name from comparison operators
+                    column_name = clean_column_name_from_comparison(column_name, debug=debug)
                     conditions.append((column_name, 'contains', values))
                     if debug:
                         print(f"      [DEBUG] Parsed condition: {column_name} contains {values}")
@@ -1287,7 +1350,8 @@ def parse_applies_if_condition(applies_if_text, debug=False):
     return conditions
 
 
-def check_applies_if_condition(conditions, etof_number, df_lc_etof_row, debug=False):
+def check_applies_if_condition(conditions, etof_number, df_lc_etof_row, debug=False, 
+                               etof_to_measurement=None, etof_to_units_measurement=None):
     """
     Check if the Applies If conditions are met for a given ETOF row.
     
@@ -1296,6 +1360,8 @@ def check_applies_if_condition(conditions, etof_number, df_lc_etof_row, debug=Fa
         etof_number: The ETOF number for error messages
         df_lc_etof_row: Dictionary of column -> value for this ETOF row
         debug: If True, print debug information
+        etof_to_measurement: Optional dict mapping ETOF# to MEASUREMENT string (for checking measurement-based conditions)
+        etof_to_units_measurement: Optional dict mapping ETOF# to UNITS_MEASUREMENT string (for checking measurement-based conditions)
     
     Returns:
         Tuple: (is_met, reason_if_not_met)
@@ -1360,8 +1426,36 @@ def check_applies_if_condition(conditions, etof_number, df_lc_etof_row, debug=Fa
             print(f"      [DEBUG] Matched column: {matched_column}, Actual value: {actual_value}")
         
         if matched_column is None:
-            # Column not found - condition cannot be verified
-            return False, f"Column '{column_name}' not found in shipment data for ETOF {etof_number}"
+            # Column not found - try to find it in measurements (CALCULATION_MEASURE data)
+            if etof_to_measurement and etof_to_units_measurement:
+                measurement_str = etof_to_measurement.get(etof_number, '')
+                units_measurement_str = etof_to_units_measurement.get(etof_number, '')
+                
+                if measurement_str and units_measurement_str:
+                    # Parse measurements
+                    measurements = str(measurement_str).split(';')
+                    units = str(units_measurement_str).split(';')
+                    
+                    # Try to find matching measurement
+                    column_name_lower = column_name.lower()
+                    for i, meas in enumerate(measurements):
+                        meas_clean = meas.strip()
+                        meas_lower = meas_clean.lower()
+                        
+                        if (meas_lower == column_name_lower or 
+                            column_name_lower in meas_lower or 
+                            meas_lower in column_name_lower):
+                            
+                            if i < len(units):
+                                actual_value = units[i].strip()
+                                matched_column = f"MEASUREMENT[{meas_clean}]"
+                                if debug:
+                                    print(f"      [DEBUG] Found in MEASUREMENTS: '{meas_clean}' = '{actual_value}'")
+                                break
+            
+            # If still not found, condition cannot be verified
+            if matched_column is None:
+                return False, f"Column '{column_name}' not found in shipment data or measurements for ETOF {etof_number}"
         
         # Convert actual value to string for comparison
         if actual_value is None or (isinstance(actual_value, float) and pd.isna(actual_value)):
@@ -1603,10 +1697,14 @@ def extract_measurement_value(rate_by_text, measurement_str, units_measurement_s
     
     These are semicolon-separated and correspond 1:1.
     
+    NOTE: The measurement_str and units_measurement_str may also include data parsed from 
+    CALCULATION_MEASURE column which has format "ACC/THC Fee=1" (measurement=units).
+    This data is merged into the measurement/units strings before being passed to this function.
+    
     Args:
         rate_by_text: The Rate By text (e.g., "Rate by: Condition/ExpressDelivery" or "Condition/ExpressDelivery")
-        measurement_str: The MEASUREMENT column value
-        units_measurement_str: The UNITS_MEASUREMENT column value
+        measurement_str: The MEASUREMENT column value (may include parsed CALCULATION_MEASURE data)
+        units_measurement_str: The UNITS_MEASUREMENT column value (may include parsed CALCULATION_MEASURE data)
         debug: If True, print debug information
     
     Returns:
@@ -1615,12 +1713,13 @@ def extract_measurement_value(rate_by_text, measurement_str, units_measurement_s
     if not measurement_str or not units_measurement_str:
         return None, None, False
     
+    import re
+    
     # Clean up the rate_by_text to extract the measurement type
     # It could be "Rate by: Condition/ExpressDelivery" or just "Condition/ExpressDelivery"
     rate_by_clean = str(rate_by_text).strip()
     if 'rate by:' in rate_by_clean.lower():
         # Extract what comes after "Rate by:"
-        import re
         match = re.search(r'rate by:\s*([^\r\n]+)', rate_by_clean, re.IGNORECASE)
         if match:
             rate_by_clean = match.group(1).strip()
@@ -1630,6 +1729,23 @@ def extract_measurement_value(rate_by_text, measurement_str, units_measurement_s
         rate_by_clean = rate_by_clean.split('\r')[0].strip()
     if '\n' in rate_by_clean:
         rate_by_clean = rate_by_clean.split('\n')[0].strip()
+    
+    # Remove comparison operators and their values (e.g., "ACC/ENS Fee greater than 50" -> "ACC/ENS Fee")
+    # Common patterns: greater than, less than, equals, =, >, <, >=, <=
+    comparison_patterns = [
+        r'\s+greater\s+than.*$',
+        r'\s+less\s+than.*$',
+        r'\s+equals.*$',
+        r'\s+equal\s+to.*$',
+        r'\s+>=.*$',
+        r'\s+<=.*$',
+        r'\s+>.*$',
+        r'\s+<.*$',
+        r'\s+=.*$',
+    ]
+    
+    for pattern in comparison_patterns:
+        rate_by_clean = re.sub(pattern, '', rate_by_clean, flags=re.IGNORECASE).strip()
     
     rate_by_lower = rate_by_clean.lower()
     
@@ -2392,6 +2508,77 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
     print(f"   Created ETOF -> MEASUREMENT mapping: {len(etof_to_measurement)} entries")
     print(f"   Created ETOF -> UNITS_MEASUREMENT mapping: {len(etof_to_units_measurement)} entries")
     
+    # Find CALCULATION_MEASURE column in lc_etof_mapping
+    # This column contains values like "ACC/THC Fee=1" where:
+    # - "ACC/THC Fee" is the measurement name (like MEASUREMENT column)
+    # - "1" is the units value (like UNITS_MEASUREMENT column)
+    calculation_measure_col = None
+    for col in df_lc_etof_mapping.columns:
+        col_lower = col.lower().replace('_', '').replace(' ', '')
+        if 'calculation' in col_lower and 'measure' in col_lower:
+            calculation_measure_col = col
+            break
+    
+    print(f"   CALCULATION_MEASURE column: {calculation_measure_col}")
+    
+    # Parse CALCULATION_MEASURE and merge into MEASUREMENT/UNITS_MEASUREMENT mappings
+    calc_measure_parsed_count = 0
+    if etof_col_mapping and calculation_measure_col:
+        for _, row in df_lc_etof_mapping.iterrows():
+            etof_num = row.get(etof_col_mapping)
+            calc_measure = row.get(calculation_measure_col)
+            
+            if pd.notna(etof_num) and pd.notna(calc_measure):
+                etof_key = str(etof_num).strip()
+                calc_str = str(calc_measure).strip()
+                
+                # Parse the format "ACC/THC Fee=1"
+                # Multiple entries can be separated by semicolons: "ACC/THC Fee=1;ENS Fee=2"
+                if '=' in calc_str:
+                    # Get existing measurements for this ETOF
+                    existing_measurement = etof_to_measurement.get(etof_key, '')
+                    existing_units = etof_to_units_measurement.get(etof_key, '')
+                    
+                    # Parse semicolon-separated entries
+                    calc_entries = calc_str.split(';')
+                    new_measurements = []
+                    new_units = []
+                    
+                    for entry in calc_entries:
+                        entry = entry.strip()
+                        if '=' in entry:
+                            parts = entry.split('=', 1)  # Split on first '=' only
+                            if len(parts) == 2:
+                                meas_name = parts[0].strip()
+                                units_val = parts[1].strip()
+                                new_measurements.append(meas_name)
+                                new_units.append(units_val)
+                    
+                    if new_measurements:
+                        calc_measure_parsed_count += 1
+                        
+                        # Debug: Show first few parsed entries
+                        if debug and calc_measure_parsed_count <= 5:
+                            print(f"   [DEBUG] ETOF {etof_key} - Parsed CALCULATION_MEASURE: {calc_str}")
+                            for i, (meas, unit) in enumerate(zip(new_measurements, new_units)):
+                                print(f"      {i+1}. '{meas}' = '{unit}'")
+                        
+                        # Append to existing measurements
+                        if existing_measurement:
+                            # Convert existing values to strings to handle int/float types
+                            combined_measurement = str(existing_measurement) + ';' + ';'.join(new_measurements)
+                            combined_units = str(existing_units) + ';' + ';'.join(new_units)
+                        else:
+                            combined_measurement = ';'.join(new_measurements)
+                            combined_units = ';'.join(new_units)
+                        
+                        etof_to_measurement[etof_key] = combined_measurement
+                        etof_to_units_measurement[etof_key] = combined_units
+    
+    print(f"   Parsed CALCULATION_MEASURE for {calc_measure_parsed_count} ETOFs")
+    print(f"   After merging CALCULATION_MEASURE - ETOF -> MEASUREMENT mapping: {len(etof_to_measurement)} entries")
+    print(f"   After merging CALCULATION_MEASURE - ETOF -> UNITS_MEASUREMENT mapping: {len(etof_to_units_measurement)} entries")
+    
     # Create ETOF -> full row data mapping (for Applies If condition checking)
     etof_to_row_data = {}
     if etof_col_mapping:
@@ -2618,9 +2805,10 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
                     applies_if_met = False
                     applies_if_reason = f"ETOF {etof_number} not found in lc_etof_with_comments - cannot verify Applies If conditions"
                 else:
-                    # Check if all conditions are met
+                    # Check if all conditions are met (pass measurement mappings for checking measurement-based conditions)
                     applies_if_met, applies_if_reason = check_applies_if_condition(
-                        parsed_conditions, etof_number, etof_row_data, debug=row_debug
+                        parsed_conditions, etof_number, etof_row_data, debug=row_debug,
+                        etof_to_measurement=etof_to_measurement, etof_to_units_measurement=etof_to_units_measurement
                     )
                 
                 if row_debug:
@@ -2918,12 +3106,14 @@ def check_conditions_and_add_reason(df_mismatch, df_lc_etof_mapping, all_rate_co
                     if charge_weight is None or (isinstance(charge_weight, float) and pd.isna(charge_weight)):
                         multiplier_not_found_reason = f"CHARGE_WEIGHT not found for ETOF {etof_number}"
                 else:
-                    # Use MEASUREMENT/UNITS_MEASUREMENT
+                    # Use MEASUREMENT/UNITS_MEASUREMENT (includes data from CALCULATION_MEASURE column)
                     measurement_str = etof_to_measurement.get(etof_number, '')
                     units_measurement_str = etof_to_units_measurement.get(etof_number, '')
                     
                     if row_debug:
-                        print(f"   [DEBUG] Rate By = '{rate_by}' (measurement-based) -> looking in MEASUREMENT column...")
+                        print(f"   [DEBUG] Rate By = '{rate_by}' (measurement-based) -> looking in MEASUREMENT/CALCULATION_MEASURE columns...")
+                        print(f"   [DEBUG] ETOF {etof_number} MEASUREMENT string: {measurement_str}")
+                        print(f"   [DEBUG] ETOF {etof_number} UNITS_MEASUREMENT string: {units_measurement_str}")
                     
                     meas_name, meas_value, meas_found = extract_measurement_value(
                         rate_by, measurement_str, units_measurement_str, debug=row_debug
