@@ -103,17 +103,51 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
     print(f"   DEBUG LC columns: {lc_dataframe_final.columns.tolist()}")
     print(f"   DEBUG has_carrier_agreement in ETOF: {has_carrier_agreement}")
     
-    # Check if SHIPMENT_ID is present in both dataframes
-    has_shipment_id_etof = 'SHIPMENT_ID' in etof_dataframe.columns or 'SHIPMENT ID(s)' in etof_dataframe.columns
-    has_shipment_id_lc = 'SHIPMENT_ID' in lc_dataframe_final.columns
-    use_shipment_id = has_shipment_id_etof and has_shipment_id_lc
-    print(f"   DEBUG has_shipment_id_etof: {has_shipment_id_etof}, has_shipment_id_lc: {has_shipment_id_lc}, use_shipment_id: {use_shipment_id}")
+    # Check if SHIPMENT_ID is present in both dataframes AND has valid (non-empty) values
+    has_shipment_id_etof_col = 'SHIPMENT_ID' in etof_dataframe.columns or 'SHIPMENT ID(s)' in etof_dataframe.columns
+    has_shipment_id_lc_col = 'SHIPMENT_ID' in lc_dataframe_final.columns
     
-    # Check if DELIVERY NUMBER is present in both dataframes (fallback option)
-    has_delivery_number_etof = 'DELIVERY NUMBER(s)' in etof_dataframe.columns or 'DELIVERY_NUMBER' in etof_dataframe.columns
-    has_delivery_number_lc = 'DELIVERY_NUMBER' in lc_dataframe_final.columns
-    use_delivery_number = has_delivery_number_etof and has_delivery_number_lc and not use_shipment_id
-    print(f"   DEBUG has_delivery_number_etof: {has_delivery_number_etof}, has_delivery_number_lc: {has_delivery_number_lc}, use_delivery_number: {use_delivery_number}")
+    # Check if columns have valid (non-empty, non-NaN) values
+    has_shipment_id_etof_values = False
+    if has_shipment_id_etof_col:
+        etof_shipment_col_check = 'SHIPMENT_ID' if 'SHIPMENT_ID' in etof_dataframe.columns else 'SHIPMENT ID(s)'
+        etof_valid_shipment_ids = etof_dataframe[etof_shipment_col_check].dropna()
+        etof_valid_shipment_ids = etof_valid_shipment_ids[etof_valid_shipment_ids.astype(str).str.strip() != '']
+        etof_valid_shipment_ids = etof_valid_shipment_ids[etof_valid_shipment_ids.astype(str).str.lower() != 'nan']
+        has_shipment_id_etof_values = len(etof_valid_shipment_ids) > 0
+    
+    has_shipment_id_lc_values = False
+    if has_shipment_id_lc_col:
+        lc_valid_shipment_ids = lc_dataframe_final['SHIPMENT_ID'].dropna()
+        lc_valid_shipment_ids = lc_valid_shipment_ids[lc_valid_shipment_ids.astype(str).str.strip() != '']
+        lc_valid_shipment_ids = lc_valid_shipment_ids[lc_valid_shipment_ids.astype(str).str.lower() != 'nan']
+        has_shipment_id_lc_values = len(lc_valid_shipment_ids) > 0
+    
+    use_shipment_id = has_shipment_id_etof_col and has_shipment_id_lc_col and has_shipment_id_etof_values and has_shipment_id_lc_values
+    print(f"   DEBUG has_shipment_id_etof_col: {has_shipment_id_etof_col}, has_shipment_id_lc_col: {has_shipment_id_lc_col}, has_shipment_id_etof_values: {has_shipment_id_etof_values}, has_shipment_id_lc_values: {has_shipment_id_lc_values}, use_shipment_id: {use_shipment_id}")
+    
+    # Check if DELIVERY NUMBER is present in both dataframes AND has valid (non-empty) values (fallback option)
+    has_delivery_number_etof_col = 'DELIVERY NUMBER(s)' in etof_dataframe.columns or 'DELIVERY_NUMBER' in etof_dataframe.columns
+    has_delivery_number_lc_col = 'DELIVERY_NUMBER' in lc_dataframe_final.columns
+    
+    # Check if columns have valid (non-empty, non-NaN) values
+    has_delivery_number_etof_values = False
+    if has_delivery_number_etof_col:
+        etof_delivery_col_check = 'DELIVERY NUMBER(s)' if 'DELIVERY NUMBER(s)' in etof_dataframe.columns else 'DELIVERY_NUMBER'
+        etof_valid_delivery_numbers = etof_dataframe[etof_delivery_col_check].dropna()
+        etof_valid_delivery_numbers = etof_valid_delivery_numbers[etof_valid_delivery_numbers.astype(str).str.strip() != '']
+        etof_valid_delivery_numbers = etof_valid_delivery_numbers[etof_valid_delivery_numbers.astype(str).str.lower() != 'nan']
+        has_delivery_number_etof_values = len(etof_valid_delivery_numbers) > 0
+    
+    has_delivery_number_lc_values = False
+    if has_delivery_number_lc_col:
+        lc_valid_delivery_numbers = lc_dataframe_final['DELIVERY_NUMBER'].dropna()
+        lc_valid_delivery_numbers = lc_valid_delivery_numbers[lc_valid_delivery_numbers.astype(str).str.strip() != '']
+        lc_valid_delivery_numbers = lc_valid_delivery_numbers[lc_valid_delivery_numbers.astype(str).str.lower() != 'nan']
+        has_delivery_number_lc_values = len(lc_valid_delivery_numbers) > 0
+    
+    use_delivery_number = has_delivery_number_etof_col and has_delivery_number_lc_col and has_delivery_number_etof_values and has_delivery_number_lc_values and not use_shipment_id
+    print(f"   DEBUG has_delivery_number_etof_col: {has_delivery_number_etof_col}, has_delivery_number_lc_col: {has_delivery_number_lc_col}, has_delivery_number_etof_values: {has_delivery_number_etof_values}, has_delivery_number_lc_values: {has_delivery_number_lc_values}, use_delivery_number: {use_delivery_number}")
     
     if use_shipment_id:
         # Determine which SHIPMENT_ID column name exists in ETOF
@@ -320,8 +354,8 @@ def process_lc_etof_mapping(lc_input_path, etof_path, lc_recursive=False):
 
 
 if __name__ == "__main__":
-    lc_input_path = "lc_rhenus.xml"
-    etof_path = "etofs_rhenus.xlsx"
+    lc_input_path = "lc aptiv.xml"
+    etof_path = "etofs aptiv.xlsx"
     
     df_lc_updated, lc_column_names = process_lc_etof_mapping(
         lc_input_path, 
