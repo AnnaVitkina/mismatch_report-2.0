@@ -822,6 +822,8 @@ def find_best_matching_accessorial_cost(cost_type, df_accessorial, lane_number, 
             is_valid, validity_reason = is_date_in_validity_range(ship_date, valid_from, valid_to, debug=debug)
             if is_valid:
                 valid_matches.append(match)
+                if debug:
+                    print(f"      [DEBUG] Accessorial: '{cost_name}' lane {match_lane} VALID for ship_date={ship_date}, valid_from={valid_from}, valid_to={valid_to}")
             else:
                 invalid_matches.append((match, validity_reason))
                 if debug:
@@ -830,6 +832,38 @@ def find_best_matching_accessorial_cost(cost_type, df_accessorial, lane_number, 
         if valid_matches:
             if debug:
                 print(f"      [DEBUG] Accessorial: {len(valid_matches)} matches after date validity filter (excluded {len(invalid_matches)})")
+            
+            # If multiple valid matches, prioritize by validity period (most recent valid_to date)
+            if len(valid_matches) > 1:
+                # Parse ship_date once
+                if isinstance(ship_date, datetime):
+                    ship_dt = ship_date
+                else:
+                    ship_dt = parse_date_string(ship_date)
+                
+                # Sort matches by valid_to date (most recent first), then by valid_from (most recent first)
+                def get_valid_to_date(match):
+                    _, _, _, _, _, _, _, valid_from, valid_to, _, _, _ = match
+                    if valid_to:
+                        to_dt = parse_date_string(valid_to)
+                        return to_dt if to_dt else datetime.min
+                    return datetime.min
+                
+                def get_valid_from_date(match):
+                    _, _, _, _, _, _, _, valid_from, valid_to, _, _, _ = match
+                    if valid_from:
+                        from_dt = parse_date_string(valid_from)
+                        return from_dt if from_dt else datetime.min
+                    return datetime.min
+                
+                # Sort by valid_to (descending - most recent first), then by valid_from (descending)
+                valid_matches.sort(key=lambda x: (get_valid_to_date(x), get_valid_from_date(x)), reverse=True)
+                
+                if debug:
+                    for i, match in enumerate(valid_matches[:3]):  # Show top 3
+                        _, _, _, _, _, _, _, vf, vt, _, _, _ = match
+                        print(f"      [DEBUG] Accessorial: Valid match #{i+1}: valid_from={vf}, valid_to={vt}")
+            
             lane_matches = valid_matches
         else:
             if debug:
