@@ -266,7 +266,7 @@ def is_cost_name_row(row_values, row_idx):
         pass
     
     # Skip common data row indicators (case insensitive)
-    skip_keywords = ['lane', 'currency', 'flat', 'p/unit', 'min', 'apply if', 'applies if', 'rate by', 'rate by:', 'multiplier', 'per ']
+    skip_keywords = ['lane', 'currency', 'flat', 'p/unit', 'min', 'apply if', 'applies if', 'rate by', 'rate by:', 'multiplier', 'per ', 'no data']
     for keyword in skip_keywords:
         if first_lower.startswith(keyword):
             return False
@@ -939,9 +939,18 @@ def save_to_excel(costs: List[AccessorialCost], sheet, agreement_number=None, ou
             # Single sheet with all lane data
             if not df_detail.empty:
                 df_detail.to_excel(writer, sheet_name='Accessorial Costs', index=False)
+            else:
+                # Create a minimal sheet with "No Data" message when there are no costs
+                # This prevents the "At least one sheet must be visible" error
+                df_empty = pd.DataFrame({'Message': ['No accessorial costs found in this rate card']})
+                df_empty.to_excel(writer, sheet_name='Accessorial Costs', index=False)
             
-        print(f"\n   Saved to: {output_path}")
-        print(f"      - {len(df_detail)} lane entries from {len(costs)} cost types")
+        if not df_detail.empty:
+            print(f"\n   Saved to: {output_path}")
+            print(f"      - {len(df_detail)} lane entries from {len(costs)} cost types")
+        else:
+            print(f"\n   Saved to: {output_path}")
+            print(f"      - No accessorial costs found (empty file created)")
         
     except PermissionError:
         alt_filename = filename.replace('.xlsx', '_new.xlsx')
@@ -949,6 +958,10 @@ def save_to_excel(costs: List[AccessorialCost], sheet, agreement_number=None, ou
         with pd.ExcelWriter(alt_path, engine='openpyxl') as writer:
             if not df_detail.empty:
                 df_detail.to_excel(writer, sheet_name='Accessorial Costs', index=False)
+            else:
+                # Create a minimal sheet with "No Data" message
+                df_empty = pd.DataFrame({'Message': ['No accessorial costs found in this rate card']})
+                df_empty.to_excel(writer, sheet_name='Accessorial Costs', index=False)
         print(f"\n   [WARNING] Original file is open. Saved to: {alt_path}")
         output_path = alt_path
     
@@ -1089,7 +1102,7 @@ def main():
     print("="*80)
     
     # Process multiple rate cards (same as part4_rate_card_processing.py)
-    rate_card_files = ["ra_densir.xlsx"]
+    rate_card_files = ["rate gstar.xlsx"]
     results = process_multiple_rate_cards(rate_card_files)
     
     return results
