@@ -14,7 +14,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 
 
 class OutputLogger:
@@ -129,6 +129,143 @@ def normalize_column_name(col_name):
     if col_name is None:
         return None
     return str(col_name).lower().replace(" ", "").replace("_", "")
+
+
+def parse_date_flexible(date_value):
+    """
+    Parse date from various formats and return a date object.
+    
+    Supports formats:
+    - YYYYMMDD (e.g., 20251214)
+    - DD.MM.YYYY (e.g., 14.12.2025)
+    - YYYY-MM-DD (e.g., 2025-12-14)
+    - Excel datetime objects
+    
+    Args:
+        date_value: Date value in various formats
+        
+    Returns:
+        date object or None if parsing fails
+    """
+    if pd.isna(date_value) or date_value is None:
+        return None
+    
+    # If already a datetime or date object
+    if isinstance(date_value, (datetime, date)):
+        return date_value if isinstance(date_value, date) else date_value.date()
+    
+    date_str = str(date_value).strip()
+    if not date_str or date_str.lower() == 'nan':
+        return None
+    
+    # Try YYYYMMDD format (20251214)
+    if len(date_str) == 8 and date_str.isdigit():
+        try:
+            year = int(date_str[0:4])
+            month = int(date_str[4:6])
+            day = int(date_str[6:8])
+            return date(year, month, day)
+        except (ValueError, IndexError):
+            pass
+    
+    # Try DD.MM.YYYY format (14.12.2025)
+    if '.' in date_str:
+        parts = date_str.split('.')
+        if len(parts) == 3:
+            try:
+                day = int(parts[0])
+                month = int(parts[1])
+                year = int(parts[2])
+                return date(year, month, day)
+            except (ValueError, IndexError):
+                pass
+    
+    # Try YYYY-MM-DD format (2025-12-14)
+    if '-' in date_str:
+        parts = date_str.split('-')
+        if len(parts) == 3:
+            try:
+                year = int(parts[0])
+                month = int(parts[1])
+                day = int(parts[2])
+                return date(year, month, day)
+            except (ValueError, IndexError):
+                pass
+    
+    # Try DD/MM/YYYY format (14/12/2025)
+    if '/' in date_str:
+        parts = date_str.split('/')
+        if len(parts) == 3:
+            try:
+                day = int(parts[0])
+                month = int(parts[1])
+                year = int(parts[2])
+                return date(year, month, day)
+            except (ValueError, IndexError):
+                pass
+    
+    return None
+
+
+def is_date_in_validity_period(ship_date, valid_from, valid_to, debug=False):
+    """
+    Check if a shipment date falls within the validity period of a lane.
+    
+    Args:
+        ship_date: Shipment date (any format supported by parse_date_flexible)
+        valid_from: Valid From date (any format)
+        valid_to: Valid To date (any format)
+        debug: Enable debug output
+        
+    Returns:
+        tuple: (is_valid: bool or None, reason: str)
+               - True: date is within validity period
+               - False: date is outside validity period
+               - None: no validity dates specified (lane is always valid)
+    """
+    ship_date_obj = parse_date_flexible(ship_date)
+    valid_from_obj = parse_date_flexible(valid_from)
+    valid_to_obj = parse_date_flexible(valid_to)
+    
+    # If no validity dates specified, lane is always valid
+    if valid_from_obj is None and valid_to_obj is None:
+        return None, "No validity period specified"
+    
+    # If no ship date, we can't validate
+    if ship_date_obj is None:
+        if debug:
+            print(f"      [DATE] Cannot validate - ship_date is missing or invalid: '{ship_date}'")
+        return None, "Ship date missing or invalid"
+    
+    # Check Valid From
+    if valid_from_obj is not None:
+        if ship_date_obj < valid_from_obj:
+            reason = f"Ship date {ship_date_obj} is before Valid From {valid_from_obj}"
+            if debug:
+                print(f"      [DATE] DISQUALIFIED: {reason}")
+            return False, reason
+    
+    # Check Valid To
+    if valid_to_obj is not None:
+        if ship_date_obj > valid_to_obj:
+            reason = f"Ship date {ship_date_obj} is after Valid To {valid_to_obj}"
+            if debug:
+                print(f"      [DATE] DISQUALIFIED: {reason}")
+            return False, reason
+    
+    # Date is within validity period
+    reason = f"Ship date {ship_date_obj} is within validity period"
+    if valid_from_obj and valid_to_obj:
+        reason += f" ({valid_from_obj} to {valid_to_obj})"
+    elif valid_from_obj:
+        reason += f" (from {valid_from_obj})"
+    elif valid_to_obj:
+        reason += f" (until {valid_to_obj})"
+    
+    if debug:
+        print(f"      [DATE] VALID: {reason}")
+    
+    return True, reason
 
 
 # Note: extract_country_code is already applied in part1_etof_file_processing.py
@@ -904,6 +1041,25 @@ def match_shipments_with_rate_card(df_etofs, df_filtered_rate_card, common_colum
             rate_card_br_columns.append(col)
     print(f"[DEBUG] Rate card business rule columns to check: {rate_card_br_columns}")
     
+    # Identify Valid From and Valid To columns in rate card
+    valid_from_col = None
+    valid_to_col = None
+    for col in df_filtered_rate_card.columns:
+        col_lower = str(col).lower().replace(' ', '').replace('_', '')
+        if 'validfrom' in col_lower:
+            valid_from_col = col
+        elif 'validto' in col_lower:
+            valid_to_col = col
+    
+    if valid_from_col or valid_to_col:
+        print(f"[DEBUG] Date validity columns found:")
+        if valid_from_col:
+            print(f"   - Valid From: '{valid_from_col}'")
+        if valid_to_col:
+            print(f"   - Valid To: '{valid_to_col}'")
+    else:
+        print(f"[DEBUG] No date validity columns found in rate card")
+    
     # PRE-COMPUTE rate card normalized values ONCE
     print(f"\n[DEBUG] Pre-computing rate card values...")
     precompute_start = time.time()
@@ -916,7 +1072,9 @@ def match_shipments_with_rate_card(df_etofs, df_filtered_rate_card, common_colum
             'normalized_values': {},
             'raw_values': {},
             'raw_values_lower': {},  # Pre-compute lowercase for condition matching
-            'br_column_values': {}   # Business rule column values (even if not in common columns)
+            'br_column_values': {},  # Business rule column values (even if not in common columns)
+            'valid_from': None,      # Valid From date
+            'valid_to': None         # Valid To date
         }
         
         for i, col_norm in enumerate(common_columns_normalized):
@@ -933,6 +1091,12 @@ def match_shipments_with_rate_card(df_etofs, df_filtered_rate_card, common_colum
             if br_col in row_rate_card:
                 precomputed['br_column_values'][br_col] = row_rate_card[br_col]
         
+        # Store Valid From and Valid To dates
+        if valid_from_col and valid_from_col in row_rate_card:
+            precomputed['valid_from'] = row_rate_card[valid_from_col]
+        if valid_to_col and valid_to_col in row_rate_card:
+            precomputed['valid_to'] = row_rate_card[valid_to_col]
+        
         rate_card_precomputed.append(precomputed)
     
     precompute_time = time.time() - precompute_start
@@ -944,6 +1108,25 @@ def match_shipments_with_rate_card(df_etofs, df_filtered_rate_card, common_colum
         col_lower = col_norm.lower()
         if 'post' in col_lower or 'ship_post' in col_lower or 'cust_post' in col_lower:
             postal_code_cols.add(col_norm)
+    
+    # Identify SHIP_DATE column in shipment data
+    ship_date_col = None
+    ship_date_patterns = ['SHIP_DATE', 'ship_date', 'Ship Date', 'Loading date', 'SHIP DATE', 'ShipDate', 'shipdate']
+    for col in df_etofs.columns:
+        col_str = str(col)
+        col_lower = col_str.lower().replace(' ', '').replace('_', '')
+        for pattern in ship_date_patterns:
+            pattern_lower = pattern.lower().replace(' ', '').replace('_', '')
+            if col_lower == pattern_lower:
+                ship_date_col = col
+                break
+        if ship_date_col:
+            break
+    
+    if ship_date_col:
+        print(f"[DEBUG] Ship date column found: '{ship_date_col}'")
+    else:
+        print(f"[DEBUG] No ship date column found in shipment data")
     
     # Start main matching loop
     print(f"\n[DEBUG] Starting main matching loop...")
@@ -988,6 +1171,13 @@ def match_shipments_with_rate_card(df_etofs, df_filtered_rate_card, common_colum
                 if key in row_etofs_dict:
                     print(f"   Shipment {key}: '{row_etofs_dict[key]}'")
         
+        # Extract ship date from shipment
+        ship_date_value = None
+        if ship_date_col and ship_date_col in row_etofs_dict:
+            ship_date_value = row_etofs_dict[ship_date_col]
+            if show_debug and ship_date_value:
+                print(f"   Shipment Ship Date: '{ship_date_value}'")
+        
         # Prepare normalized values for the current ETOFS row
         etofs_normalized_values = {}
         etofs_raw_values_lower = {}
@@ -1017,6 +1207,37 @@ def match_shipments_with_rate_card(df_etofs, df_filtered_rate_card, common_colum
             row_disqualified = False
             disqualify_reason = None
             match_details = []  # Track why each column matched/failed
+            
+            # CHECK DATE VALIDITY: Verify if shipment date falls within lane's validity period
+            lane_valid_from = precomputed_rc.get('valid_from')
+            lane_valid_to = precomputed_rc.get('valid_to')
+            
+            if lane_valid_from is not None or lane_valid_to is not None:
+                date_is_valid, date_reason = is_date_in_validity_period(
+                    ship_date_value, lane_valid_from, lane_valid_to, debug=show_debug
+                )
+                
+                if date_is_valid is False:
+                    # Date is outside validity period - disqualify this lane
+                    row_disqualified = True
+                    disqualify_reason = f"Date validity check failed: {date_reason}"
+                    if show_debug:
+                        match_details.append(f"   ✗ Lane {lane_num}: DATE VALIDITY FAILED → DISQUALIFIED")
+                        match_details.append(f"      Valid From: {lane_valid_from}, Valid To: {lane_valid_to}")
+                        match_details.append(f"      Ship Date: {ship_date_value}")
+                        match_details.append(f"      Reason: {date_reason}")
+                    
+                    # Add to lanes_checked for debug
+                    lanes_checked.append({
+                        'lane': lane_num,
+                        'matches': 0,
+                        'disqualified': True,
+                        'reason': disqualify_reason
+                    })
+                    continue  # Skip this lane
+                elif date_is_valid is True and show_debug:
+                    match_details.append(f"   ✓ Lane {lane_num}: DATE VALIDITY PASSED")
+                    match_details.append(f"      {date_reason}")
             
             # Compare normalized values
             for i, col_norm in enumerate(common_columns_normalized):
