@@ -749,7 +749,7 @@ def run_mismatch_analysis_gradio(
 
 
 # ---- Gradio UI Definition ----
-with gr.Blocks(title="Mismatch Analyzer") as demo:
+with gr.Blocks(title="Mismatch Analyzer", theme=gr.themes.Soft()) as demo:
     gr.Markdown("# 📊 Mismatch Analyzer")
     gr.Markdown("### Analyze cost mismatches against rate cards")
     
@@ -883,7 +883,7 @@ with gr.Blocks(title="Mismatch Analyzer") as demo:
             max_lines=40,
             interactive=False,
             placeholder="Workflow status and messages will appear here...",
-            buttons=["copy"],
+            show_copy_button=True
         )
     
     def launch_workflow(etof_file, lc_files, rate_card_files, mismatch_file, 
@@ -935,17 +935,10 @@ if __name__ == "__main__":
     # Check if running in Colab
     in_colab = 'google.colab' in sys.modules
     
-    launch_kwargs = dict(theme=gr.themes.Soft(), share=False)
-
     if in_colab:
         print("🚀 Launching Gradio interface for Google Colab...")
-        demo.launch(
-            server_name="0.0.0.0",
-            debug=False,
-            show_error=True,
-            **launch_kwargs,
-        )
+        demo.launch(server_name="0.0.0.0", share=False, debug=False, show_error=True)
     else:
         print("🚀 Launching Gradio interface locally...")
         print(f"💡 Upload your files through the web interface")
-        demo.launch(server_name="127.0.0.1", **launch_kwargs)
+        demo.launch(server_name="127.0.0.1", share=False)
