@@ -5,8 +5,7 @@ Currently enabled for Aptiv only. Merges complementary pairs only:
   - row with Pre-calc. cost but no Carrier's cost
   - row with Carrier's cost but no Pre-calc. cost
 
-Does NOT merge rows that already have both amounts, or multiple rows with
-different Pre-calc. values (e.g. credit + charge lines).
+Must run BEFORE discrepancy filtering so Pre-calc-only rows are not dropped first.
 """
 
 from __future__ import annotations
@@ -24,13 +23,25 @@ def is_etof_merge_enabled_for_shipper(shipper_id: str | None) -> bool:
     return shipper_id.strip().lower() in SHIPPERS_WITH_ETOF_ROW_MERGE
 
 
-def _find_column(df: pd.DataFrame, *patterns: str) -> str | None:
+def _column_rank(col_name: str, preferred_terms: list[str]) -> int:
+    """Lower rank is better. Unmatched columns get a large rank."""
+    col_lower = str(col_name).lower()
+    for idx, term in enumerate(preferred_terms):
+        if term in col_lower:
+            return idx
+    return len(preferred_terms) + 1
+
+
+def _pick_best_column(df: pd.DataFrame, preferred_terms: list[str]) -> str | None:
+    """Pick the best matching column using ordered preference terms."""
+    candidates = []
     for col in df.columns:
         col_lower = str(col).lower()
-        for pattern in patterns:
-            if pattern.lower() in col_lower:
-                return col
-    return None
+        if any(term in col_lower for term in preferred_terms):
+            candidates.append(col)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda col: _column_rank(col, preferred_terms))
 
 
 def _find_etof_column(df: pd.DataFrame) -> str | None:
@@ -46,9 +57,56 @@ def _find_etof_column(df: pd.DataFrame) -> str | None:
 def _find_cost_type_column(df: pd.DataFrame) -> str | None:
     for col in df.columns:
         col_lower = str(col).lower()
-        if "cost" in col_lower and "type" in col_lower:
+        if col_lower == "cost type" or ("cost" in col_lower and "type" in col_lower):
             return col
     return None
+
+
+def _resolve_amount_columns(df: pd.DataFrame) -> dict:
+    """
+    Resolve amount columns, preferring invoice-currency fields used in mismatch reports.
+
+    Raw ISD files have both `Pre-calc. cost value` and `Pre-calc. cost (in inv curr)`.
+    The pipeline must use invoice-currency columns for merge and discrepancy recompute.
+    """
+    precalc_col = _pick_best_column(
+        df,
+        [
+            "pre-calc. cost (in inv curr)",
+            "pre-calc. cost",
+            "pre-calc",
+            "precalc",
+        ],
+    )
+    carrier_col = _pick_best_column(
+        df,
+        [
+            "invoice statement cost  (in inv curr)",
+            "invoice statement cost (in inv curr)",
+            "carrier's cost",
+            "invoice statement cost",
+            "carrier cost",
+        ],
+    )
+    discrepancy_col = _pick_best_column(
+        df,
+        [
+            "discrepancy in inv currency  (in inv curr)",
+            "discrepancy in inv currency (in inv curr)",
+            "discrepancy in inv currency",
+            "discrepancy",
+        ],
+    )
+    agreement_col = _pick_best_column(df, ["carrier agreement"])
+
+    return {
+        "etof": _find_etof_column(df),
+        "cost_type": _find_cost_type_column(df),
+        "precalc": precalc_col,
+        "carrier": carrier_col,
+        "discrepancy": discrepancy_col,
+        "agreement": agreement_col,
+    }
 
 
 def _is_present(value) -> bool:
@@ -60,12 +118,40 @@ def _is_present(value) -> bool:
     return True
 
 
+def _to_float(value):
+    try:
+        if _is_present(value):
+            return float(value)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def recompute_discrepancy(df: pd.DataFrame, columns: dict | None = None) -> pd.DataFrame:
+    """Recompute discrepancy as Carrier's cost minus Pre-calc. cost when both values exist."""
+    work = df.copy()
+    columns = columns or _resolve_amount_columns(work)
+    precalc_col = columns.get("precalc")
+    carrier_col = columns.get("carrier")
+    discrepancy_col = columns.get("discrepancy")
+
+    if not precalc_col or not carrier_col or not discrepancy_col:
+        return work
+
+    for idx, row in work.iterrows():
+        precalc = _to_float(row.get(precalc_col))
+        carrier = _to_float(row.get(carrier_col))
+        if precalc is not None and carrier is not None:
+            work.at[idx, discrepancy_col] = carrier - precalc
+
+    return work
+
+
 def _merge_two_rows(row_a: pd.Series, row_b: pd.Series, columns: dict) -> pd.Series:
     """Combine two complementary rows into one, filling Pre-calc / Carrier from each side."""
     merged = row_a.copy()
     precalc_col = columns.get("precalc")
     carrier_col = columns.get("carrier")
-    discrepancy_col = columns.get("discrepancy")
 
     for col in (precalc_col, carrier_col):
         if not col:
@@ -74,14 +160,6 @@ def _merge_two_rows(row_a: pd.Series, row_b: pd.Series, columns: dict) -> pd.Ser
             val = row.get(col)
             if _is_present(val) and not _is_present(merged.get(col)):
                 merged[col] = val
-
-    if discrepancy_col and precalc_col and carrier_col:
-        try:
-            precalc = float(merged[precalc_col])
-            carrier = float(merged[carrier_col])
-            merged[discrepancy_col] = carrier - precalc
-        except (TypeError, ValueError):
-            pass
 
     return merged
 
@@ -96,24 +174,28 @@ def merge_split_etof_cost_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     if df is None or df.empty:
         return df, {"enabled": True, "input_rows": 0, "output_rows": 0, "merged_pairs": 0}
 
-    etof_col = _find_etof_column(df)
-    cost_type_col = _find_cost_type_column(df)
-    precalc_col = _find_column(df, "pre-calc", "precalc")
-    carrier_col = _find_column(df, "carrier's cost", "carrier cost", "invoice statement")
-    discrepancy_col = _find_column(df, "discrepancy")
-    agreement_col = _find_column(df, "carrier agreement")
+    columns = _resolve_amount_columns(df)
+    etof_col = columns["etof"]
+    cost_type_col = columns["cost_type"]
+    precalc_col = columns["precalc"]
+    carrier_col = columns["carrier"]
+    agreement_col = columns["agreement"]
 
     if not etof_col or not cost_type_col:
         print("   [ETOF merge] Skip: ETOF or Cost type column not found")
         return df.copy(), {"enabled": True, "skipped": True, "reason": "missing columns"}
 
-    columns = {
-        "etof": etof_col,
-        "cost_type": cost_type_col,
-        "precalc": precalc_col,
-        "carrier": carrier_col,
-        "discrepancy": discrepancy_col,
-    }
+    if not precalc_col or not carrier_col:
+        print(
+            f"   [ETOF merge] Skip: amount columns not found "
+            f"(precalc={precalc_col}, carrier={carrier_col})"
+        )
+        return df.copy(), {"enabled": True, "skipped": True, "reason": "missing amount columns"}
+
+    print(
+        f"   [ETOF merge] Using columns: precalc='{precalc_col}', "
+        f"carrier='{carrier_col}', discrepancy='{columns.get('discrepancy')}'"
+    )
 
     work = df.copy()
     work["_cost_type_key"] = work[cost_type_col].astype(str).str.strip()
@@ -134,8 +216,8 @@ def merge_split_etof_cost_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         other_rows = []
 
         for _, row in group.iterrows():
-            has_precalc = precalc_col and _is_present(row.get(precalc_col))
-            has_carrier = carrier_col and _is_present(row.get(carrier_col))
+            has_precalc = _is_present(row.get(precalc_col))
+            has_carrier = _is_present(row.get(carrier_col))
 
             if has_precalc and has_carrier:
                 both_rows.append(row)
@@ -159,6 +241,7 @@ def merge_split_etof_cost_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
     result = pd.DataFrame(merged_rows).drop(columns=["_cost_type_key"], errors="ignore")
     result = result.reset_index(drop=True)
+    result = recompute_discrepancy(result, columns)
 
     stats = {
         "enabled": True,
@@ -166,6 +249,9 @@ def merge_split_etof_cost_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "output_rows": len(result),
         "merged_pairs": merged_pairs,
         "rows_removed": len(df) - len(result),
+        "precalc_col": precalc_col,
+        "carrier_col": carrier_col,
+        "discrepancy_col": columns.get("discrepancy"),
     }
     return result, stats
 
