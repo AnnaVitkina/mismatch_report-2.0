@@ -366,7 +366,10 @@ def run_workflow(
         try:
             from mismatch_report import main as mismatch_report_main
             log_step(7, f"Generating mismatch report (include_positive={include_positive_discrepancy})...", "info")
-            mismatch_df = mismatch_report_main(include_positive_discrepancy=include_positive_discrepancy)
+            mismatch_df = mismatch_report_main(
+                include_positive_discrepancy=include_positive_discrepancy,
+                shipper_id=shipper_name,
+            )
             log_step(7, f"Mismatch report generated: {len(mismatch_df)} rows", "success")
         except Exception as e:
             log_step(7, f"Mismatch report failed: {e}", "warning")
