@@ -535,7 +535,7 @@ def save_result_with_tabs(df, output_filename="mismatch_filing.xlsx"):
     return output_path
 
 
-def main(include_positive_discrepancy=False):
+def main(include_positive_discrepancy=False, shipper_id=None):
     """Main function to process mismatches and add comments."""
     print("\n" + "="*80)
     print("MISMATCHES FILING")
@@ -549,6 +549,10 @@ def main(include_positive_discrepancy=False):
     print("\n2. Getting Carrier Agreement # mapping from lc_etof_with_comments.xlsx...")
     etof_to_agreement = get_carrier_agreement_mapping_from_lc_etof()
     df_mismatch = add_carrier_agreement(df_mismatch, etof_to_agreement)
+
+    # Step 2b (Aptiv only): merge complementary Pre-calc / Carrier split rows
+    from etof_row_merge import maybe_merge_mismatch_rows
+    df_mismatch = maybe_merge_mismatch_rows(df_mismatch, shipper_id)
     
     # Step 3: Load costs for all agreements (rate_costs + accessorial_costs)
     print("\n3. Loading costs for all agreements...")
