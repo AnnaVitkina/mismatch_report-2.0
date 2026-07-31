@@ -23,10 +23,13 @@ def get_partly_df_folder():
     return Path(__file__).parent / "partly_df"
 
 
-def get_mismatch_report(include_positive_discrepancy=False):
+def get_mismatch_report(include_positive_discrepancy=False, shipper_id=None):
     """Get the mismatch report DataFrame from mismatch_report.py."""
     print("Running mismatch_report.py...")
-    df = run_mismatch_report(include_positive_discrepancy=include_positive_discrepancy)
+    df = run_mismatch_report(
+        include_positive_discrepancy=include_positive_discrepancy,
+        shipper_id=shipper_id,
+    )
     print(f"Got mismatch report: {len(df)} rows")
     return df
 
@@ -543,17 +546,16 @@ def main(include_positive_discrepancy=False, shipper_id=None):
     
     # Step 1: Get mismatch report from mismatch_report.py
     print("\n1. Getting mismatch report...")
-    df_mismatch = get_mismatch_report(include_positive_discrepancy=include_positive_discrepancy)
+    df_mismatch = get_mismatch_report(
+        include_positive_discrepancy=include_positive_discrepancy,
+        shipper_id=shipper_id,
+    )
     
     # Step 2: Get Carrier Agreement # mapping from lc_etof_with_comments.xlsx
     print("\n2. Getting Carrier Agreement # mapping from lc_etof_with_comments.xlsx...")
     etof_to_agreement = get_carrier_agreement_mapping_from_lc_etof()
     df_mismatch = add_carrier_agreement(df_mismatch, etof_to_agreement)
 
-    # Step 2b (Aptiv only): merge complementary Pre-calc / Carrier split rows
-    from etof_row_merge import maybe_merge_mismatch_rows
-    df_mismatch = maybe_merge_mismatch_rows(df_mismatch, shipper_id)
-    
     # Step 3: Load costs for all agreements (rate_costs + accessorial_costs)
     print("\n3. Loading costs for all agreements...")
     agreement_costs = load_all_agreement_costs()
