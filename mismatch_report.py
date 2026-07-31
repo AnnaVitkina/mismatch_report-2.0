@@ -11,6 +11,7 @@ import pandas as pd
 import os
 from pathlib import Path
 from part1_etof_file_processing import process_etof_file
+from etof_row_merge import is_etof_merge_enabled_for_shipper, maybe_merge_mismatch_rows
 
 
 def load_mismatch_file(file_path="mismatch.xlsx"):
@@ -248,7 +249,7 @@ def save_report(df_report, output_filename="mismatch_report.xlsx"):
     return output_path
 
 
-def main(include_positive_discrepancy=True):
+def main(include_positive_discrepancy=True, shipper_id=None):
     """
     Main function to create the mismatch report.
     
@@ -256,13 +257,19 @@ def main(include_positive_discrepancy=True):
         include_positive_discrepancy: If True, keep all discrepancy values (except zero).
                                       If False, remove rows with positive discrepancy values
                                       (keep only negative discrepancies).
+        shipper_id: Optional shipper identifier (enables Aptiv row merge before filtering).
     """
     print("\n" + "="*80)
     print("MISMATCH REPORT")
     print("="*80)
     
+    merge_enabled = is_etof_merge_enabled_for_shipper(shipper_id)
+    effective_include_positive = include_positive_discrepancy or merge_enabled
+
     print(f"\n   include_positive_discrepancy = {include_positive_discrepancy}")
-    if include_positive_discrepancy:
+    if merge_enabled and not include_positive_discrepancy:
+        print("   [ETOF merge] Aptiv merge enabled -> keeping all non-zero discrepancies after merge")
+    elif effective_include_positive:
         print("   (Keeping all non-zero discrepancies)")
     else:
         print("   (Keeping only NEGATIVE discrepancies)")
@@ -279,10 +286,15 @@ def main(include_positive_discrepancy=True):
     # Step 3: Filter by ETOF numbers
     print("\n3. Filtering by ETOF numbers...")
     df_filtered = filter_by_etof_numbers(df_mismatch, df_etof)
+
+    # Step 3b: Merge split Pre-calc / Carrier rows before discrepancy filtering (Aptiv only)
+    if merge_enabled:
+        print("\n3b. Merging split mismatch rows before discrepancy filtering...")
+        df_filtered = maybe_merge_mismatch_rows(df_filtered, shipper_id)
     
     # Step 4: Create pivot report
     print("\n4. Creating pivot report...")
-    df_report = create_pivot_report(df_filtered, include_positive_discrepancy)
+    df_report = create_pivot_report(df_filtered, effective_include_positive)
     
     # Step 5: Save report
     print("\n5. Saving report...")
