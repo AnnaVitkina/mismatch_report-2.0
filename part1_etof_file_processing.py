@@ -3,6 +3,22 @@ import os
 from pathlib import Path
 
 
+def _normalize_shipment_id(value):
+    """Normalize shipment IDs for consistent matching (e.g. 124670.0 -> '124670')."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == 'nan':
+        return None
+    try:
+        num = float(text)
+        if num.is_integer():
+            return str(int(num))
+    except (TypeError, ValueError):
+        pass
+    return text
+
+
 def save_dataframe_to_excel(df, output_filename, folder_name="partly_df"):
     output_folder = Path(__file__).parent / folder_name
     output_folder.mkdir(exist_ok=True)
@@ -130,6 +146,7 @@ def process_etof_file(file_path):
                         
                         # Convert to string for consistent matching
                         df_etofs['SHIPMENT_ID'] = df_etofs['ETOF #'].astype(str).map(etof_to_shipment)
+                        df_etofs['SHIPMENT_ID'] = df_etofs['SHIPMENT_ID'].apply(_normalize_shipment_id)
                         mapped_count = df_etofs['SHIPMENT_ID'].notna().sum()
                         print(f"   Mapped SHIPMENT_ID for {mapped_count}/{len(df_etofs)} rows")
                     else:
