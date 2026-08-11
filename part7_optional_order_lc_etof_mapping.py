@@ -75,6 +75,35 @@ def save_dataframe_by_carrier_agreement(df, output_filename, folder_name="partly
     return str(output_path)
 
 
+def _normalize_match_key(value):
+    """Normalize IDs for matching (e.g. 124670.0 -> '124670')."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == 'nan':
+        return None
+    try:
+        num = float(text)
+        if num.is_integer():
+            return str(int(num))
+    except (TypeError, ValueError):
+        pass
+    return text
+
+
+def _collect_normalized_keys(series):
+    keys = set()
+    for value in series:
+        key = _normalize_match_key(value)
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _count_key_overlap(series_a, series_b):
+    return len(_collect_normalized_keys(series_a) & _collect_normalized_keys(series_b))
+
+
 def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
     """
     Map "ETOF #" and "Carrier agreement #" from etof_dataframe to lc_dataframe_updated.
@@ -123,8 +152,18 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         lc_valid_shipment_ids = lc_valid_shipment_ids[lc_valid_shipment_ids.astype(str).str.lower() != 'nan']
         has_shipment_id_lc_values = len(lc_valid_shipment_ids) > 0
     
-    use_shipment_id = has_shipment_id_etof_col and has_shipment_id_lc_col and has_shipment_id_etof_values and has_shipment_id_lc_values
-    print(f"   DEBUG has_shipment_id_etof_col: {has_shipment_id_etof_col}, has_shipment_id_lc_col: {has_shipment_id_lc_col}, has_shipment_id_etof_values: {has_shipment_id_etof_values}, has_shipment_id_lc_values: {has_shipment_id_lc_values}, use_shipment_id: {use_shipment_id}")
+    can_use_shipment_id = (
+        has_shipment_id_etof_col
+        and has_shipment_id_lc_col
+        and has_shipment_id_etof_values
+        and has_shipment_id_lc_values
+    )
+    print(
+        f"   DEBUG has_shipment_id_etof_col: {has_shipment_id_etof_col}, "
+        f"has_shipment_id_lc_col: {has_shipment_id_lc_col}, "
+        f"has_shipment_id_etof_values: {has_shipment_id_etof_values}, "
+        f"has_shipment_id_lc_values: {has_shipment_id_lc_values}"
+    )
     
     # Check if DELIVERY NUMBER is present in both dataframes AND has valid (non-empty) values (fallback option)
     has_delivery_number_etof_col = 'DELIVERY NUMBER(s)' in etof_dataframe.columns or 'DELIVERY_NUMBER' in etof_dataframe.columns
@@ -146,8 +185,51 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         lc_valid_delivery_numbers = lc_valid_delivery_numbers[lc_valid_delivery_numbers.astype(str).str.lower() != 'nan']
         has_delivery_number_lc_values = len(lc_valid_delivery_numbers) > 0
     
-    use_delivery_number = has_delivery_number_etof_col and has_delivery_number_lc_col and has_delivery_number_etof_values and has_delivery_number_lc_values and not use_shipment_id
-    print(f"   DEBUG has_delivery_number_etof_col: {has_delivery_number_etof_col}, has_delivery_number_lc_col: {has_delivery_number_lc_col}, has_delivery_number_etof_values: {has_delivery_number_etof_values}, has_delivery_number_lc_values: {has_delivery_number_lc_values}, use_delivery_number: {use_delivery_number}")
+    can_use_delivery_number = (
+        has_delivery_number_etof_col
+        and has_delivery_number_lc_col
+        and has_delivery_number_etof_values
+        and has_delivery_number_lc_values
+    )
+    print(
+        f"   DEBUG has_delivery_number_etof_col: {has_delivery_number_etof_col}, "
+        f"has_delivery_number_lc_col: {has_delivery_number_lc_col}, "
+        f"has_delivery_number_etof_values: {has_delivery_number_etof_values}, "
+        f"has_delivery_number_lc_values: {has_delivery_number_lc_values}"
+    )
+
+    shipment_overlap = 0
+    delivery_overlap = 0
+    if can_use_shipment_id:
+        etof_shipment_col_check = (
+            'SHIPMENT_ID' if 'SHIPMENT_ID' in etof_dataframe.columns else 'SHIPMENT ID(s)'
+        )
+        shipment_overlap = _count_key_overlap(
+            etof_dataframe[etof_shipment_col_check],
+            lc_dataframe_final['SHIPMENT_ID'],
+        )
+    if can_use_delivery_number:
+        etof_delivery_col_check = (
+            'DELIVERY NUMBER(s)' if 'DELIVERY NUMBER(s)' in etof_dataframe.columns else 'DELIVERY_NUMBER'
+        )
+        delivery_overlap = _count_key_overlap(
+            etof_dataframe[etof_delivery_col_check],
+            lc_dataframe_final['DELIVERY_NUMBER'],
+        )
+
+    use_shipment_id = False
+    use_delivery_number = False
+    if can_use_shipment_id and shipment_overlap > delivery_overlap:
+        use_shipment_id = True
+    elif can_use_delivery_number:
+        use_delivery_number = True
+    elif can_use_shipment_id:
+        use_shipment_id = True
+
+    print(
+        f"   DEBUG overlap shipment_id={shipment_overlap}, delivery_number={delivery_overlap}, "
+        f"use_shipment_id={use_shipment_id}, use_delivery_number={use_delivery_number}"
+    )
     
     if use_shipment_id:
         # Determine which SHIPMENT_ID column name exists in ETOF
@@ -161,12 +243,12 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         shipment_to_carrier_agreement = {}
         
         for _, row in etof_dataframe.iterrows():
-            shipment_id = str(row.get(etof_shipment_col, '')).strip()
+            shipment_id = _normalize_match_key(row.get(etof_shipment_col))
             etof_value = str(row.get('ETOF #', '')).strip()
             lc_value = str(row.get('LC #', '')).strip() if 'LC #' in etof_dataframe.columns else None
             carrier_agreement_value = str(row.get('Carrier agreement #', '')).strip() if has_carrier_agreement else None
             
-            if pd.notna(row.get(etof_shipment_col)) and shipment_id and shipment_id.lower() != 'nan':
+            if shipment_id:
                 if pd.notna(row.get('ETOF #')) and etof_value and etof_value.lower() != 'nan':
                     # Map SHIPMENT_ID (key) to ETOF # (value)
                     shipment_to_etof[shipment_id] = etof_value
@@ -191,22 +273,22 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         
         # Map ETOF # values by matching SHIPMENT_ID
         def find_etof_number_by_shipment(row):
-            shipment_id = str(row.get('SHIPMENT_ID', '')).strip()
-            if pd.isna(row.get('SHIPMENT_ID')) or shipment_id == '' or shipment_id.lower() == 'nan':
+            shipment_id = _normalize_match_key(row.get('SHIPMENT_ID'))
+            if not shipment_id:
                 return None
             return shipment_to_etof.get(shipment_id)
         
         # Map LC # values by matching SHIPMENT_ID
         def find_lc_number_by_shipment(row):
-            shipment_id = str(row.get('SHIPMENT_ID', '')).strip()
-            if pd.isna(row.get('SHIPMENT_ID')) or shipment_id == '' or shipment_id.lower() == 'nan':
+            shipment_id = _normalize_match_key(row.get('SHIPMENT_ID'))
+            if not shipment_id:
                 return None
             return shipment_to_lc.get(shipment_id)
         
         # Map Carrier agreement # values by matching SHIPMENT_ID
         def find_carrier_agreement_by_shipment(row):
-            shipment_id = str(row.get('SHIPMENT_ID', '')).strip()
-            if pd.isna(row.get('SHIPMENT_ID')) or shipment_id == '' or shipment_id.lower() == 'nan':
+            shipment_id = _normalize_match_key(row.get('SHIPMENT_ID'))
+            if not shipment_id:
                 return None
             return shipment_to_carrier_agreement.get(shipment_id)
         
@@ -237,12 +319,12 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         delivery_to_carrier_agreement = {}
         
         for _, row in etof_dataframe.iterrows():
-            delivery_number = str(row.get(etof_delivery_col, '')).strip()
+            delivery_number = _normalize_match_key(row.get(etof_delivery_col))
             etof_value = str(row.get('ETOF #', '')).strip()
             lc_value = str(row.get('LC #', '')).strip() if 'LC #' in etof_dataframe.columns else None
             carrier_agreement_value = str(row.get('Carrier agreement #', '')).strip() if has_carrier_agreement else None
             
-            if pd.notna(row.get(etof_delivery_col)) and delivery_number and delivery_number.lower() != 'nan':
+            if delivery_number:
                 if pd.notna(row.get('ETOF #')) and etof_value and etof_value.lower() != 'nan':
                     # Map DELIVERY_NUMBER (key) to ETOF # (value)
                     delivery_to_etof[delivery_number] = etof_value
@@ -267,22 +349,22 @@ def map_etof_to_lc(etof_dataframe, lc_dataframe_updated):
         
         # Map ETOF # values by matching DELIVERY_NUMBER
         def find_etof_number_by_delivery(row):
-            delivery_number = str(row.get('DELIVERY_NUMBER', '')).strip()
-            if pd.isna(row.get('DELIVERY_NUMBER')) or delivery_number == '' or delivery_number.lower() == 'nan':
+            delivery_number = _normalize_match_key(row.get('DELIVERY_NUMBER'))
+            if not delivery_number:
                 return None
             return delivery_to_etof.get(delivery_number)
         
         # Map LC # values by matching DELIVERY_NUMBER
         def find_lc_number_by_delivery(row):
-            delivery_number = str(row.get('DELIVERY_NUMBER', '')).strip()
-            if pd.isna(row.get('DELIVERY_NUMBER')) or delivery_number == '' or delivery_number.lower() == 'nan':
+            delivery_number = _normalize_match_key(row.get('DELIVERY_NUMBER'))
+            if not delivery_number:
                 return None
             return delivery_to_lc.get(delivery_number)
         
         # Map Carrier agreement # values by matching DELIVERY_NUMBER
         def find_carrier_agreement_by_delivery(row):
-            delivery_number = str(row.get('DELIVERY_NUMBER', '')).strip()
-            if pd.isna(row.get('DELIVERY_NUMBER')) or delivery_number == '' or delivery_number.lower() == 'nan':
+            delivery_number = _normalize_match_key(row.get('DELIVERY_NUMBER'))
+            if not delivery_number:
                 return None
             return delivery_to_carrier_agreement.get(delivery_number)
         
